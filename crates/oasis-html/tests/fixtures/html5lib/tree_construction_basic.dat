@@ -79,8 +79,9 @@
 | <html>
 |   <head>
 |     <template>
-|       <p>
-|         "x"
+|       content
+|         <p>
+|           "x"
 |   <body>
 
 #data

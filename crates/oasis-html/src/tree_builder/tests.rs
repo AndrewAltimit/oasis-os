@@ -374,6 +374,8 @@ fn doctype_skipped() {
     let tokens = vec![
         Token::Doctype(DoctypeToken {
             name: Some("html".to_string()),
+            public_id: None,
+            system_id: None,
             force_quirks: false,
         }),
         start("html"),

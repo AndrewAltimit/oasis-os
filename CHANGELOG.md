@@ -6,6 +6,22 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Browser (HTML)
+
+- The HTML parser is about 3x faster on typical pages (full parse of a 100 KB page 5.2 ms to
+  1.4 ms; table-heavy pages 7.3 ms to 3.5 ms): text runs are one token instead of one per
+  character, and the tree builder no longer allocates per tag. The tree builder alone is back
+  below its pre-overhaul time.
+- `<template>` contents parse with the spec's "in template" mode: `<template><tr><td>`
+  (the usual row template for scripts) keeps its rows and cells instead of dropping the tags.
+- Quirks mode: the DOCTYPE's public / system identifiers pick quirks, limited-quirks or
+  standards mode (new `Document::quirks_mode`); in quirks mode (no DOCTYPE, or a legacy one)
+  `<table>` no longer closes an open `<p>`, as in browsers. `DoctypeToken` gains `public_id`
+  and `system_id` **(breaking)**.
+- `--!>` ends a comment; text in `<textarea>`, `<xmp>`, `<iframe>`, `<noembed>` no longer
+  gets bold / italic reopened inside it; misnested formatting around a table
+  (`<table><a>1<p>2</a>3`) lands before the table instead of inside it.
+
 ### Browser (CSS)
 
 - The user-agent sheet is its own cascade origin: author rules in any `@layer` now beat it

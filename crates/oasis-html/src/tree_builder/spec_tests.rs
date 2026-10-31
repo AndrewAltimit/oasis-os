@@ -200,3 +200,41 @@ fn tag_names_used_by_the_tests_exist() {
     // Guards the string-based lookups above against TagName renames.
     assert_eq!(TagName::from_str("noscript").as_str(), "noscript");
 }
+
+#[test]
+fn doctype_sets_the_document_quirks_mode() {
+    use super::super::dom::QuirksMode;
+    assert_eq!(TreeBuilder::parse("<p>x").quirks_mode, QuirksMode::Quirks);
+    assert_eq!(
+        TreeBuilder::parse("<!DOCTYPE html><p>x").quirks_mode,
+        QuirksMode::NoQuirks
+    );
+    let limited = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \
+                   \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">";
+    assert_eq!(
+        TreeBuilder::parse(limited).quirks_mode,
+        QuirksMode::LimitedQuirks
+    );
+    // A reused arena starts over.
+    let old = TreeBuilder::parse("<p>x");
+    let doc = TreeBuilder::parse_reuse("<!DOCTYPE html>", ParseOptions::default(), old);
+    assert_eq!(doc.quirks_mode, QuirksMode::NoQuirks);
+}
+
+#[test]
+fn unclosed_template_in_table_keeps_its_rows() {
+    // EOF inside a template inside a table: the row parses as the
+    // template's content, not as dropped tags.
+    let doc = TreeBuilder::parse("<!DOCTYPE html><table><template><tr><td>a");
+    assert_eq!(parent_name(&doc, find(&doc, "td")), "tr");
+    assert_eq!(parent_name(&doc, find(&doc, "tr")), "template");
+    assert_eq!(parent_name(&doc, find(&doc, "template")), "table");
+}
+
+#[test]
+fn template_form_does_not_set_the_form_pointer() {
+    // A form inside a template is not the document's open form, so a
+    // later form outside it is still created.
+    let doc = TreeBuilder::parse("<template><form></form></template><form id=b></form>");
+    assert_eq!(find_all(&doc, "form").len(), 2);
+}

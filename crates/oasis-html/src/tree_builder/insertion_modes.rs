@@ -1,75 +1,88 @@
 //! Insertion mode handlers outside tables (WHATWG §13.2.6.4); the
 //! table and select modes live in `tables.rs`.
 
-use super::super::dom::{NodeId, NodeKind, TagName};
+use super::super::dom::{NodeId, NodeKind, QuirksMode, TagName};
 use super::super::tokenizer::{StartTagToken, Token};
 use super::{InsertionMode, TreeBuilder, is_all_whitespace};
 
+// The tag sets below are `matches!` rather than slices: a `contains`
+// scan string-compared every entry for each tag (the in-body start-tag
+// path ran three of them).
+
 /// Block-ish start tags that close an open `<p>` (WHATWG §13.2.6.4.7).
-const CLOSES_P: &[&str] = &[
-    "address",
-    "article",
-    "aside",
-    "blockquote",
-    "center",
-    "details",
-    "dialog",
-    "dir",
-    "div",
-    "dl",
-    "fieldset",
-    "figcaption",
-    "figure",
-    "footer",
-    "header",
-    "hgroup",
-    "main",
-    "menu",
-    "nav",
-    "ol",
-    "p",
-    "search",
-    "section",
-    "summary",
-    "ul",
-];
+fn closes_p(name: &str) -> bool {
+    matches!(
+        name,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "center"
+            | "details"
+            | "dialog"
+            | "dir"
+            | "div"
+            | "dl"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "header"
+            | "hgroup"
+            | "main"
+            | "menu"
+            | "nav"
+            | "ol"
+            | "p"
+            | "search"
+            | "section"
+            | "summary"
+            | "ul"
+    )
+}
 
 /// End tags that close their element when it is in scope.
-const BLOCK_END_TAGS: &[&str] = &[
-    "address",
-    "article",
-    "aside",
-    "blockquote",
-    "button",
-    "center",
-    "details",
-    "dialog",
-    "dir",
-    "div",
-    "dl",
-    "fieldset",
-    "figcaption",
-    "figure",
-    "footer",
-    "header",
-    "hgroup",
-    "listing",
-    "main",
-    "menu",
-    "nav",
-    "ol",
-    "pre",
-    "search",
-    "section",
-    "summary",
-    "ul",
-];
+fn is_block_end_tag(name: &str) -> bool {
+    matches!(name, "button" | "listing" | "pre") || (name != "p" && closes_p(name))
+}
 
 /// Start tags handled by the "in head" rules wherever they appear.
-const HEAD_CONTENT: &[&str] = &[
-    "base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style", "template",
-    "title",
-];
+fn is_head_content(name: &str) -> bool {
+    matches!(
+        name,
+        "base"
+            | "basefont"
+            | "bgsound"
+            | "link"
+            | "meta"
+            | "noframes"
+            | "script"
+            | "style"
+            | "template"
+            | "title"
+    )
+}
+
+/// [`TagName::is_formatting`] by name, without building a `TagName`
+/// (which allocates for unknown names).
+fn is_formatting_name(name: &str) -> bool {
+    matches!(
+        name,
+        "a" | "b"
+            | "big"
+            | "code"
+            | "em"
+            | "font"
+            | "i"
+            | "nobr"
+            | "s"
+            | "small"
+            | "strike"
+            | "strong"
+            | "tt"
+            | "u"
+    )
+}
 
 fn is_heading_name(name: &str) -> bool {
     matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
@@ -82,8 +95,9 @@ impl TreeBuilder {
 
     pub(crate) fn handle_initial(&mut self, token: Token) {
         match token {
-            Token::Doctype(_) => {
-                // Ignore doctype for DOM purposes; switch mode.
+            Token::Doctype(ref doctype) => {
+                // The DOM keeps no doctype node, only the mode it selects.
+                self.doc.quirks_mode = super::quirks::quirks_mode_for(doctype);
                 self.mode = InsertionMode::BeforeHtml;
             },
             Token::Comment(text) => {
@@ -95,7 +109,8 @@ impl TreeBuilder {
                 // Ignore leading whitespace.
             },
             _ => {
-                // Anything else: switch to BeforeHtml and reprocess.
+                // No DOCTYPE: quirks mode; reprocess in "before html".
+                self.doc.quirks_mode = QuirksMode::Quirks;
                 self.mode = InsertionMode::BeforeHtml;
                 self.process_token(token);
             },
@@ -197,17 +212,6 @@ impl TreeBuilder {
 
     /// "In head", anything else: pop `<head>` and reprocess "after head".
     fn head_anything_else(&mut self, token: Token) {
-        // If a `<template>` is open anywhere on the stack, dispatch the
-        // token via the InBody rules so its children parse normally
-        // instead of implicitly closing `<head>`.
-        let in_template = self
-            .open_elements
-            .iter()
-            .any(|&id| self.is_html_named(id, "template"));
-        if in_template {
-            self.handle_in_body(token);
-            return;
-        }
         if self.current_is("head") {
             self.pop_open_element();
         }
@@ -256,7 +260,7 @@ impl TreeBuilder {
                 self.frameset_ok = false;
                 self.mode = InsertionMode::InBody;
             },
-            Token::StartTag(tag) if HEAD_CONTENT.contains(&tag.name.as_str()) => {
+            Token::StartTag(tag) if is_head_content(&tag.name) => {
                 // Head content after `</head>`: it still goes in the head.
                 let Some(head) = self.head_element else {
                     self.after_head_anything_else(token);
@@ -287,21 +291,25 @@ impl TreeBuilder {
 
     pub(crate) fn handle_in_body(&mut self, token: Token) {
         match token {
-            Token::Character(ref s) => {
+            Token::Character(s) => {
                 self.reconstruct_formatting();
-                self.insert_text(s);
-                if !is_all_whitespace(s) {
+                if !is_all_whitespace(&s) {
                     self.frameset_ok = false;
                 }
+                self.insert_text_owned(s);
             },
             Token::Comment(text) => self.insert_comment(text),
             Token::StartTag(ref tag) => self.handle_start_tag_in_body(tag, &token),
             Token::EndTag(ref tag) => {
-                let name = tag.name.to_ascii_lowercase();
+                let name = super::lowercase(&tag.name);
                 self.handle_end_tag_in_body(&name, &token);
             },
             Token::Eof => {
-                // Implicitly close everything.
+                // Open templates close by the "in template" rules; the
+                // rest of the stack just ends.
+                if !self.template_modes.is_empty() {
+                    self.handle_in_template(Token::Eof);
+                }
             },
             Token::Doctype(_) => {
                 log::trace!("html parse error: stray doctype in body");
@@ -311,8 +319,8 @@ impl TreeBuilder {
 
     /// Process a start tag while in InBody mode.
     pub(crate) fn handle_start_tag_in_body(&mut self, tag: &StartTagToken, token: &Token) {
-        let name = tag.name.to_ascii_lowercase();
-        let name = name.as_str();
+        let name = super::lowercase(&tag.name);
+        let name = &*name;
         match name {
             "html" => {
                 if let Some(&html) = self.open_elements.first()
@@ -321,7 +329,7 @@ impl TreeBuilder {
                     self.merge_attributes(html, &tag.attributes);
                 }
             },
-            _ if HEAD_CONTENT.contains(&name) => self.handle_in_head(token.clone()),
+            _ if is_head_content(name) => self.handle_in_head(token.clone()),
             "body" => {
                 let body = self.open_elements.get(1).copied();
                 if let Some(body) = body
@@ -333,7 +341,7 @@ impl TreeBuilder {
                 }
             },
             "frameset" => {},
-            _ if CLOSES_P.contains(&name) => {
+            _ if closes_p(name) => {
                 self.close_p_if_in_scope();
                 self.insert_html(tag);
             },
@@ -395,7 +403,7 @@ impl TreeBuilder {
                 let id = self.insert_html(tag);
                 self.push_active_formatting(id);
             },
-            _ if TagName::from_str(name).is_formatting() => {
+            _ if is_formatting_name(name) => {
                 self.reconstruct_formatting();
                 let id = self.insert_html(tag);
                 self.push_active_formatting(id);
@@ -407,7 +415,10 @@ impl TreeBuilder {
                 self.frameset_ok = false;
             },
             "table" => {
-                self.close_p_if_in_scope();
+                // In quirks mode a table may sit inside a paragraph.
+                if self.doc.quirks_mode != QuirksMode::Quirks {
+                    self.close_p_if_in_scope();
+                }
                 self.insert_html(tag);
                 self.frameset_ok = false;
                 self.mode = InsertionMode::InTable;
@@ -442,8 +453,11 @@ impl TreeBuilder {
                 self.insert_leaf(id);
                 self.frameset_ok = false;
             },
+            // RCDATA / raw-text elements take their text in the `Text`
+            // mode: in-body text processing reopened formatting elements
+            // inside them.
             "textarea" => {
-                self.insert_html(tag);
+                self.insert_text_element(tag);
                 self.ignore_lf = true;
                 self.frameset_ok = false;
             },
@@ -451,12 +465,14 @@ impl TreeBuilder {
                 self.close_p_if_in_scope();
                 self.reconstruct_formatting();
                 self.frameset_ok = false;
-                self.insert_html(tag);
+                self.insert_text_element(tag);
             },
             "iframe" => {
                 self.frameset_ok = false;
-                self.insert_html(tag);
+                self.insert_text_element(tag);
             },
+            "noembed" => self.insert_text_element(tag),
+            "noscript" if self.scripting => self.insert_text_element(tag),
             "select" => {
                 self.reconstruct_formatting();
                 let id = self.insert_html(tag);
@@ -517,7 +533,7 @@ impl TreeBuilder {
                 // on non-void HTML elements (`<span/>` stays open).
                 self.reconstruct_formatting();
                 let id = self.create_element_from_start_tag(tag);
-                if TagName::from_str(name).is_void() {
+                if self.tag_of(id).is_some_and(TagName::is_void) {
                     self.insert_leaf(id);
                 } else {
                     self.insert_element(id);
@@ -558,8 +574,7 @@ impl TreeBuilder {
                 self.open_elements.truncate(idx);
                 return;
             }
-            let special =
-                self.tag_of(id).is_some_and(TagName::is_special) || self.ns_of(id).bounds_scope();
+            let special = self.is_special_node(id);
             let exempt = ["address", "div", "p"]
                 .iter()
                 .any(|n| self.is_html_named(id, n));
@@ -585,7 +600,7 @@ impl TreeBuilder {
                     self.process_token(token.clone());
                 }
             },
-            _ if BLOCK_END_TAGS.contains(&name) => {
+            _ if is_block_end_tag(name) => {
                 if self.has_in_scope(&tag) {
                     self.generate_implied_end_tags(None);
                     self.close_to_tag(&tag);
@@ -737,9 +752,7 @@ impl TreeBuilder {
     pub(crate) fn handle_text(&mut self, token: Token) {
         let target = self.text_element.unwrap_or_else(|| self.current_node());
         match token {
-            Token::Character(ref s) => {
-                self.append_text_to(target, s);
-            },
+            Token::Character(s) => self.append_text_owned(target, s),
             Token::EndTag(_) | Token::Eof => {
                 if self.open_elements.last() == Some(&target) {
                     self.pop_open_element();
@@ -754,39 +767,98 @@ impl TreeBuilder {
         }
     }
 
-    /// `<template>` start tag (any mode that accepts it).
+    /// `<template>` start tag (by the "in head" rules, wherever it
+    /// appears): its contents start in the "in template" mode.
     pub(crate) fn open_template(&mut self, tag: &StartTagToken) {
-        // Template contents live in a notional DocumentFragment — form
-        // pointer AND insertion mode are isolated, so table / select
-        // context does not leak into the template and vice versa.
-        self.insert_html(tag);
+        let id = self.insert_html(tag);
+        if self.current_node() != id {
+            // Not open (nesting cap): there is nothing to fill.
+            return;
+        }
         self.insert_formatting_marker();
         self.frameset_ok = false;
-        self.template_form_stack
-            .push((self.form_element, self.mode));
-        self.form_element = None;
-        // Template contents start in InBody regardless of the
-        // enclosing insertion mode.
-        self.mode = InsertionMode::InBody;
+        self.mode = InsertionMode::InTemplate;
+        self.template_modes.push(InsertionMode::InTemplate);
     }
 
-    /// `</template>` in any HTML insertion mode: close the template and
-    /// restore the form pointer and mode saved when it opened. (Table
-    /// modes used to route it to foster parenting, leaving the parser in
-    /// table mode after the template.)
+    /// `</template>` in any HTML insertion mode (WHATWG §13.2.6.4.4):
+    /// close the template, drop its template mode and reset the
+    /// insertion mode for what encloses it.
     pub(crate) fn close_template(&mut self) {
         if !self.template_open() {
             log::trace!("html parse error: stray </template>");
             return;
         }
-        self.generate_implied_end_tags(None);
+        self.generate_implied_end_tags_thoroughly();
         self.close_to_tag(&TagName::Template);
         self.clear_formatting_to_last_marker();
-        if let Some((saved_form, saved_mode)) = self.template_form_stack.pop() {
-            self.form_element = saved_form;
-            self.mode = saved_mode;
-        } else {
-            self.reset_insertion_mode();
+        self.template_modes.pop();
+        self.reset_insertion_mode();
+    }
+
+    /// The "in template" insertion mode (WHATWG §13.2.6.4.18): the first
+    /// start tag in a template picks the mode its contents parse in, so
+    /// `<template><tr><td>` builds a row, not two dropped tags.
+    pub(crate) fn handle_in_template(&mut self, token: Token) {
+        let name = match &token {
+            Token::Character(_) | Token::Comment(_) | Token::Doctype(_) => {
+                self.handle_in_body(token);
+                return;
+            },
+            Token::EndTag(_) => return,
+            Token::Eof => {
+                if !self.template_open() {
+                    return;
+                }
+                self.close_to_tag(&TagName::Template);
+                self.clear_formatting_to_last_marker();
+                self.template_modes.pop();
+                self.reset_insertion_mode();
+                self.process_token(Token::Eof);
+                return;
+            },
+            Token::StartTag(tag) => super::lowercase(&tag.name),
+        };
+        if is_head_content(&name) {
+            self.handle_in_head(token);
+            return;
         }
+        let mode = match &*name {
+            "caption" | "colgroup" | "tbody" | "tfoot" | "thead" => InsertionMode::InTable,
+            "col" => InsertionMode::InColumnGroup,
+            "tr" => InsertionMode::InTableBody,
+            "td" | "th" => InsertionMode::InRow,
+            _ => InsertionMode::InBody,
+        };
+        self.template_modes.pop();
+        self.template_modes.push(mode);
+        self.mode = mode;
+        self.process_token(token);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formatting_names_match_tag_name_is_formatting() {
+        for name in [
+            "a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong",
+            "tt", "u", "mark", "span", "sub", "div", "x-custom",
+        ] {
+            assert_eq!(
+                is_formatting_name(name),
+                TagName::from_str(name).is_formatting(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn block_end_tags_are_the_p_closers_plus_three() {
+        assert!(is_block_end_tag("div") && is_block_end_tag("pre") && is_block_end_tag("button"));
+        assert!(!is_block_end_tag("p") && !is_block_end_tag("span"));
+        assert!(closes_p("p") && !closes_p("pre"));
     }
 }
