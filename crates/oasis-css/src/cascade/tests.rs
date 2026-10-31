@@ -1685,6 +1685,75 @@ fn memoized_sibling_positions_match_plain_scans() {
     }
 }
 
+/// `:first-child` / `:last-child` / `:only-child` walk in from one end of
+/// the list instead of scanning all of it, so a rule like `li:first-child`
+/// over a long list stays linear overall.
+#[test]
+fn edge_child_checks_do_not_scan_the_whole_list() {
+    const N: usize = 5000;
+    let mut doc = make_doc(vec![(TagName::Ul, vec![])]);
+    let mut lis = Vec::new();
+    for _ in 0..N {
+        let t = doc.add_node(NodeKind::Text(" ".into()));
+        doc.append_child(3, t);
+        let li = doc.add_node(NodeKind::Element(ElementData {
+            tag: TagName::Li,
+            attributes: vec![],
+        }));
+        doc.append_child(3, li);
+        lis.push(li);
+    }
+    let t = doc.add_node(NodeKind::Text(" ".into()));
+    doc.append_child(3, t);
+    for (src, want_first, want_last) in [
+        ("li:first-child", true, false),
+        ("li:last-child", false, true),
+        ("li:only-child", false, false),
+    ] {
+        let sel = parse_selector(src);
+        for (i, &li) in lis.iter().enumerate() {
+            let (matched, spent) = matching::matches_selector_cost(&doc, li, &sel, &ctx());
+            let want = (i == 0 && want_first) || (i == N - 1 && want_last);
+            assert_eq!(matched, want, "{src} on li {i}");
+            assert!(spent <= 8, "{src} on li {i}: spent {spent}");
+        }
+    }
+    // A lone element among text nodes is the only child.
+    let mut doc = make_doc(vec![(TagName::Ul, vec![])]);
+    for _ in 0..3 {
+        let t = doc.add_node(NodeKind::Text(" ".into()));
+        doc.append_child(3, t);
+    }
+    let li = doc.add_node(NodeKind::Element(ElementData {
+        tag: TagName::Li,
+        attributes: vec![],
+    }));
+    doc.append_child(3, li);
+    let t = doc.add_node(NodeKind::Text(" ".into()));
+    doc.append_child(3, t);
+    let sel = parse_selector("li:only-child");
+    assert!(matching::matches_selector(&doc, li, &sel, &ctx()));
+}
+
+/// A `~` walk over earlier siblings checks a structural pseudo-class on
+/// each; the memo follows it backwards, so the match pays a few scans plus
+/// the step budget rather than a scan per sibling.
+#[test]
+fn backward_sibling_walks_reuse_the_memo() {
+    const N: usize = 1000;
+    // `MAX_TRAVERSAL_STEPS`.
+    const STEP_BUDGET: usize = 16_384;
+    let doc = make_doc(vec![(TagName::Li, vec![]); N]);
+    let sel = parse_selector("li:nth-child(-n+0) ~ li");
+    for node in [3 + N / 2, 3 + N - 1] {
+        let (matched, spent) = matching::matches_selector_cost(&doc, node, &sel, &ctx());
+        assert!(!matched);
+        assert!(spent <= STEP_BUDGET + 3 * N, "node {node}: spent {spent}");
+    }
+    let sel = parse_selector("li:nth-child(1) ~ li");
+    assert!(matching::matches_selector(&doc, 3 + N - 1, &sel, &ctx()));
+}
+
 /// One structural check on a long list matches (separate scan
 /// allowance), and so do a compound's several checks on that list.
 #[test]

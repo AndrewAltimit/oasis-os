@@ -1009,7 +1009,12 @@ struct SiblingPos {
 /// `li:nth-child(odd) ~ li`) costs O(1) per check instead of a scan of the
 /// whole list each time. Only the first check on a parent is a plain scan
 /// (one `li:nth-child(odd)` per element stays as cheap as before); the
-/// second indexes the parent with one more scan and no hashing.
+/// second indexes the parent with one more scan and no hashing. Only one
+/// parent is kept: a match alternating between parents (nested lists
+/// inside `:has()`) re-indexes on each switch, paying the scan again, so
+/// it stays bounded by the allowance, no worse than without the memo.
+/// `:first-child` / `:last-child` / `:only-child` do not use it: they walk
+/// in from one end of the list ([`Budget::is_edge_child`]).
 enum SiblingMemo {
     Empty,
     /// One plain scan of this parent was done.
@@ -1020,7 +1025,7 @@ enum SiblingMemo {
         index: Vec<u32>,
         count: usize,
         /// Child slot of the last lookup: candidates are usually visited
-        /// in order, so the next one is at or right after it.
+        /// in order, so the next one is at, right after or right before it.
         hint: usize,
     },
 }
@@ -1035,10 +1040,33 @@ impl Budget {
         }
     }
 
-    /// `node`'s position among its parent's element children for the
-    /// child-indexed pseudo-classes (`:first-child`, `:nth-last-child()`,
-    /// ...; the `*-of-type` ones scan on their own), or `None` for an
-    /// orphan / non-element or once the scan allowance is spent.
+    /// Whether `node` is the first (`from_start`) or last element child of
+    /// its parent. Walks in from that end to the nearest element, charging
+    /// only the nodes it passes, so `li:first-child` on a long list is O(1)
+    /// per element rather than a scan of the whole list.
+    fn is_edge_child(&self, doc: &Document, node: NodeId, from_start: bool) -> bool {
+        let Some(parent) = doc.nodes[node].parent else {
+            return false;
+        };
+        if !matches!(doc.nodes[node].kind, NodeKind::Element(_)) {
+            return false;
+        }
+        let kids = doc.nodes[parent].children.as_slice();
+        let is_elem = |c: &NodeId| matches!(doc.nodes[*c].kind, NodeKind::Element(_));
+        let (passed, edge) = if from_start {
+            let p = kids.iter().position(is_elem);
+            (p.map_or(kids.len(), |p| p + 1), p.map(|p| kids[p]))
+        } else {
+            let p = kids.iter().rposition(is_elem);
+            (p.map_or(kids.len(), |p| kids.len() - p), p.map(|p| kids[p]))
+        };
+        self.charge_scan(passed) && edge == Some(node)
+    }
+
+    /// `node`'s position among its parent's element children for
+    /// `:nth-child()` / `:nth-last-child()` (the `*-of-type` ones scan on
+    /// their own), or `None` for an orphan / non-element or once the scan
+    /// allowance is spent.
     fn sibling_pos(&self, doc: &Document, node: NodeId) -> Option<SiblingPos> {
         let parent = doc.nodes[node].parent?;
         let kids = doc.nodes[parent].children.as_slice();
@@ -1053,10 +1081,14 @@ impl Budget {
                 // `index` was built from this list; a lookup off the hint
                 // is a scan, charged like one.
                 let at = |i: usize| kids.get(i) == Some(&node);
+                let back = hint.checked_sub(1);
                 let slot = if at(*hint) {
                     *hint
                 } else if at(*hint + 1) {
                     *hint + 1
+                } else if let Some(b) = back.filter(|&b| at(b)) {
+                    // Walks over earlier siblings (`li:nth-child(odd) ~ li`).
+                    b
                 } else {
                     if !self.charge_scan(kids.len()) {
                         return None;
@@ -1422,18 +1454,16 @@ fn matches_simple(
         SimpleSelector::Class(cls) => elem.has_class(cls),
         SimpleSelector::Id(id) => elem.get_attribute("id").is_some_and(|v| v == id),
         // Sibling-index pseudo-classes scan the parent's child list: that
-        // work is charged like a sibling combinator walk (and memoized
-        // per parent for the child-indexed ones).
-        SimpleSelector::PseudoClass(pseudo)
-            if matches!(pseudo.as_str(), "first-child" | "last-child" | "only-child") =>
-        {
-            budget
-                .sibling_pos(doc, node_id)
-                .is_some_and(|p| match pseudo.as_str() {
-                    "first-child" => p.index == 1,
-                    "last-child" => p.index == p.count,
-                    _ => p.count == 1,
-                })
+        // work is charged like a sibling combinator walk (the edge ones walk
+        // in from one end; the `nth` ones are memoized per parent).
+        SimpleSelector::PseudoClass(pseudo) if pseudo == "first-child" => {
+            budget.is_edge_child(doc, node_id, true)
+        },
+        SimpleSelector::PseudoClass(pseudo) if pseudo == "last-child" => {
+            budget.is_edge_child(doc, node_id, false)
+        },
+        SimpleSelector::PseudoClass(pseudo) if pseudo == "only-child" => {
+            budget.is_edge_child(doc, node_id, true) && budget.is_edge_child(doc, node_id, false)
         },
         SimpleSelector::PseudoClassFn(name, arg)
             if matches!(name.as_str(), "nth-child" | "nth-last-child") =>
