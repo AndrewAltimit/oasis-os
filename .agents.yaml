@@ -9,12 +9,14 @@
 # List of enabled agents
 # NOTE: Some agents are only available in specific environments:
 # - Host-only agents: claude (needs subscription auth)
+# - gemini and codex are legacy and not allowed in this lab (never enable them)
 # - Container-only agents: opencode, crush (installed in openrouter-agents container)
 enabled_agents:
   - claude      # Anthropic's Claude Code (host-only, primary agent)
   # DISABLED: Google Gemini phased out due to updated AI principles (Feb 2026)
   # allowing mass surveillance and autonomous weapons use cases.
-  # - gemini    # Google's Gemini CLI (host-only, for reviews) -- DISABLED
+  # Use Anthropic models instead.
+  # - gemini    # Google's Gemini CLI (host-only, for reviews): DISABLED
   # Containerized agents (automatically run in Docker when invoked)
   - opencode    # Open-source alternative (runs in container)
   - crush       # Charm Bracelet's multi-provider tool (runs in container)
@@ -30,7 +32,7 @@ agent_priorities:
   # For reviewing PRs (multi-reviewer pipeline with profiles)
   pr_reviews:
     - claude      # Primary reviewer (security + quality profiles)
-    - openrouter  # Third reviewer (general profile, qwen model)
+    - openrouter  # Third reviewer (general profile, particle-ai/particle-1)
 
   # For implementing code fixes
   code_fixes:
@@ -88,6 +90,7 @@ rate_limits:
 # Model configuration overrides
 model_overrides:
   # DISABLED: Google Gemini phased out due to updated AI principles (Feb 2026)
+  # allowing mass surveillance and autonomous weapons use cases.
   # gemini:
   #   pro_model: gemini-3.1-pro-preview
   #   flash_model: gemini-3-flash-preview
@@ -95,23 +98,27 @@ model_overrides:
 
   # OpenRouter agents configuration
   opencode:
-    model: qwen/qwen-2.5-coder-32b-instruct
-    temperature: 0.2
+    model: particle-ai/particle-1
 
   crush:
-    model: qwen/qwen-2.5-coder-32b-instruct
-    temperature: 0.1  # Lower temperature for Crush
+    model: particle-ai/particle-1
+
+  # DISABLED: OpenAI/Codex phased out due to mass surveillance and autonomous
+  # kill decision concerns. Use Anthropic models instead.
+  # codex:
+  #   model: gpt-5.3-codex
+  #   reasoning_effort: xhigh
 
   # OpenRouter models (for openrouter agent)
   openrouter:
-    model: "qwen/qwen3.6-plus"
+    default_model: "particle-ai/particle-1"
 
-# OpenRouter configuration
+# OpenRouter configuration (for future agents)
 openrouter:
   # API key must be provided as OPENROUTER_API_KEY environment variable
 
   # Default model for OpenRouter-compatible agents
-  default_model: qwen/qwen-2.5-coder-32b-instruct
+  default_model: particle-ai/particle-1
 
   # Fallback models if primary is unavailable
   fallback_models:

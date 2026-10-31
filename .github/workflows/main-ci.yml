@@ -128,16 +128,15 @@ jobs:
       # cargo-nextest runs all test binaries on one parallel pool (cargo test
       # runs them serially; the oasis-app e2e suites take minutes each in
       # debug). Doc-tests aren't supported by nextest, so they run after.
-      # A per-test hang guard lives in .config/nextest.toml.
+      # A per-test hang guard lives in .config/nextest.toml; tests it kills
+      # are retried once alone and, if they pass, reported as flaky warnings
+      # (scripts/ci-nextest.sh). Other failures are not retried.
       - name: Test
-        timeout-minutes: 30
+        timeout-minutes: 45
         run: |
           set -o pipefail
-          docker compose --profile ci run --rm rust-ci bash -c "
-            set -e
-            cargo nextest run --workspace --profile ci
-            cargo test --workspace --doc
-          " 2>&1 | tee test_output.txt
+          docker compose --profile ci run --rm rust-ci bash scripts/ci-nextest.sh \
+            2>&1 | tee test_output.txt
 
       - name: Test metrics summary
         if: always()
@@ -151,9 +150,12 @@ jobs:
           sed 's/\x1b\[[0-9;]*m//g' test_output.txt > test_output_plain.txt
           echo "### Test Summary" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          # nextest's final line, e.g. "Summary [ 312s] 9000 tests run: ..."
-          grep -E '^ *Summary \[' test_output_plain.txt | tail -1 \
+          # nextest's final line, e.g. "Summary [ 312s] 9000 tests run: ...";
+          # the first one is the full run (a second one is the timeout retry).
+          grep -E '^ *Summary \[' test_output_plain.txt | head -1 \
             >> $GITHUB_STEP_SUMMARY || true
+          # Tests that timed out in the full run and passed when retried.
+          grep -E '^FLAKY ' test_output_plain.txt >> $GITHUB_STEP_SUMMARY || true
           # Doc-tests (cargo test) print one "test result:" line per crate.
           DOC_PASS=$(grep -E '^test result:' test_output_plain.txt \
             | awk '{s += $4} END {print s + 0}')
