@@ -213,6 +213,23 @@ fn page_dots_hidden_when_disabled() {
     assert!(!sdi.get("bar_page_2").unwrap().visible);
 }
 
+/// A skin without a dashboard (`desktop`) has no pages to indicate.
+#[test]
+fn page_dots_hidden_without_a_dashboard() {
+    let mut bar = BottomBar::new();
+    bar.total_pages = 3;
+    let mut sdi = SdiRegistry::new();
+    let at = crate::active_theme::ActiveTheme::default();
+    let mut feat = crate::skin::SkinFeatures::default();
+    bar.update_sdi(&mut sdi, &at, &feat);
+    assert!(sdi.get("bar_page_0").unwrap().visible);
+    feat.dashboard = false;
+    bar.update_sdi(&mut sdi, &at, &feat);
+    for name in ["bar_page_0", "bar_page_1", "bar_page_2"] {
+        assert!(!sdi.get(name).unwrap().visible, "{name}");
+    }
+}
+
 #[test]
 fn media_tabs_hidden_when_disabled() {
     let bar = BottomBar::new();

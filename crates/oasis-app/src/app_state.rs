@@ -48,6 +48,20 @@ pub enum Mode {
     Desktop,
 }
 
+impl Mode {
+    /// The mode a skin rests in with no window on screen: the dashboard,
+    /// or the fullscreen terminal on a terminal-only skin (no dashboard
+    /// and no window manager, e.g. `corrupted`), which has nothing else
+    /// to show.
+    pub fn idle_for(features: &oasis_core::skin::SkinFeatures) -> Self {
+        if !features.dashboard && !features.window_manager && features.terminal {
+            Mode::Terminal
+        } else {
+            Mode::Dashboard
+        }
+    }
+}
+
 /// Dashboard, status/bottom bars, taskbar, start menu, and mouse cursor.
 pub struct UiLayer {
     pub dashboard: DashboardState,

@@ -328,7 +328,10 @@ impl<'a> BarKeys<'a> {
     /// An element text color: its own key, else the generic `text_color`,
     /// else `fallback`.
     fn text(&self, key: BarKey, fallback: Color) -> Color {
-        ov(self.get(key).or(self.get(|b| b.text_color.as_ref())), fallback)
+        ov(
+            self.get(key).or(self.get(|b| b.text_color.as_ref())),
+            fallback,
+        )
     }
 
     /// A bar's gradient: its own pair of keys, else the generic
@@ -338,7 +341,8 @@ impl<'a> BarKeys<'a> {
         ActiveTheme::bar_gradient_pair(
             self.skin,
             self.get(top).or(self.get(|b| b.gradient_top.as_ref())),
-            self.get(bottom).or(self.get(|b| b.gradient_bottom.as_ref())),
+            self.get(bottom)
+                .or(self.get(|b| b.gradient_bottom.as_ref())),
             self.status_bar_color,
         )
     }
@@ -1221,7 +1225,10 @@ mod tests {
             keys.gradient(|b| b.gradient_top.as_ref(), |b| b.gradient_bottom.as_ref())
         };
         let plain = SkinTheme::default();
-        assert_eq!(generic(&BarKeys::new(&plain, Color::rgb(100, 100, 100))), None);
+        assert_eq!(
+            generic(&BarKeys::new(&plain, Color::rgb(100, 100, 100))),
+            None
+        );
         let auto = SkinTheme {
             gradient_enabled: Some(true),
             ..SkinTheme::default()

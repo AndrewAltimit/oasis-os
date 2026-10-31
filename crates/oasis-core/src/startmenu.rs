@@ -125,7 +125,10 @@ impl StartMenuState {
         let menu_h =
             header_h + (pad + rows as i32 * at.menu.item_row_height + pad) as u32 + footer_h;
         let bar_y = crate::bottombar::bottom_bar_y(at);
-        let btn_y = bar_y + 3;
+        // Centred in the bar (3 px down on the default 24 px bar with an
+        // 18 px button; a tall dock bar no longer top-aligns it).
+        let btn_slack = at.bottombar_height as i32 - at.menu.button_height as i32;
+        let btn_y = bar_y + (btn_slack / 2).max(0);
         let menu_y = bar_y - menu_h as i32 - 2;
         Self {
             open: false,

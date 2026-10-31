@@ -89,6 +89,9 @@ impl BottomBar {
     /// unexplained white speck on skins that inherit the default
     /// `page_dot_active` color.
     ///
+    /// Skins without a dashboard (`dashboard = false`) have no pages to
+    /// indicate either.
+    ///
     /// Returns the right edge of the dots, or `dots_x` when none are shown.
     fn sync_page_dots(
         &self,
@@ -98,7 +101,7 @@ impl BottomBar {
         geo: &BarGeometry,
         dots_x: i32,
     ) -> i32 {
-        if !features.show_page_dots || self.total_pages <= 1 {
+        if !features.show_page_dots || !features.dashboard || self.total_pages <= 1 {
             hide_objects(sdi, &PAGE_DOT_NAMES);
             return dots_x;
         }

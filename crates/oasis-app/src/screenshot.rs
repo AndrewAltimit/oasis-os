@@ -250,8 +250,9 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
     if has_dashboard {
         bottom_bar.active_tab = MediaTab::Audio;
         dashboard.hide_sdi(&mut sdi);
+        // The shell keeps the start button up on media pages too.
         if let Some(ref sm) = start_menu {
-            sm.hide_sdi(&mut sdi);
+            sm.update_sdi(&mut sdi, &active_theme);
         }
         status_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
         bottom_bar.update_sdi(&mut sdi, &active_theme, &skin.features);
@@ -413,6 +414,7 @@ fn sync_desktop_chrome(
     wm: &WindowManager,
 ) {
     let at = chrome.theme;
+    restack_window_content(sdi, wm);
     status_bar.update_sdi(sdi, at, chrome.features);
     bottom_bar.reserve_taskbar = !wm.windows().is_empty();
     bottom_bar.update_sdi(sdi, at, chrome.features);
@@ -425,6 +427,25 @@ fn sync_desktop_chrome(
     );
     if let Some(sm) = chrome.start_menu {
         sm.update_sdi(sdi, at);
+    }
+}
+
+/// Keep each window's demo text lines directly above its own frame.
+///
+/// Focusing a window re-raises every window's SDI objects in stacking
+/// order, which buried the text of all but the last-created window under
+/// its own content background (the `desktop` skin's Terminal drew empty).
+/// Re-raise window by window, bottom to top, each followed by its lines.
+fn restack_window_content(sdi: &mut SdiRegistry, wm: &WindowManager) {
+    for window in wm.windows() {
+        for suffix in window.sdi_suffixes() {
+            let _ = sdi.move_to_top(&window.sdi_name(suffix));
+        }
+        for i in 0.. {
+            if sdi.move_to_top(&format!("{}_line_{i}", window.id)).is_err() {
+                break;
+            }
+        }
     }
 }
 

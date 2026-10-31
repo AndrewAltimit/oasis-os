@@ -156,6 +156,9 @@ body_color = "#000000"
 fold_color = "#FF55FF"
 outline_color = "#55FFFF"
 label_color = "#FFFFFF"
+# Solid black under the white labels: the green / magenta CGA wallpaper
+# washed out the default translucent shadow.
+label_shadow_color = "#000000"
 cursor_color = "#FF55FF80"
 icon_border_radius = 0
 cursor_border_radius = 0
