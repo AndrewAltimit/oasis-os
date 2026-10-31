@@ -47,9 +47,9 @@ pub(super) fn poll_catalog_fetch(state: &mut AppState) {
                                     .ok()
                                     .and_then(|s| s.parse::<u64>().ok())
                                     .unwrap_or(req.seek_secs);
-                                let data = format!("{url} {seek_secs}");
                                 log::info!("TV: auto-tune CH{} -> {}", ch_num, req.episode.title,);
-                                state.tv.pending_tune = Some(data);
+                                state.tv.pending_tune =
+                                    Some(oasis_core::ipc::TvTune { url, seek_secs });
                             } else if let Some(catalog) =
                                 guide.catalogs.get(idx).and_then(|c| c.as_ref())
                                 && let Some(ep) = catalog.episodes.first()
@@ -62,14 +62,14 @@ pub(super) fn poll_catalog_fetch(state: &mut AppState) {
                                     .ok()
                                     .and_then(|s| s.parse::<u64>().ok())
                                     .unwrap_or(0);
-                                let data = format!("{url} {seek_secs}");
                                 log::info!(
                                     "TV: force-tune CH{} -> {} (no schedule slot)",
                                     ch_num,
                                     ep.title,
                                 );
                                 guide.tuned_channel = Some(idx);
-                                state.tv.pending_tune = Some(data);
+                                state.tv.pending_tune =
+                                    Some(oasis_core::ipc::TvTune { url, seek_secs });
                             } else {
                                 log::warn!("TV: auto-tune CH{ch_num} failed (no episodes)");
                             }

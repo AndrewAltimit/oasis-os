@@ -23,7 +23,7 @@ pub use station::{Station, StationRegistry};
 pub use threaded::ThreadedSource;
 
 /// VFS paths of the radio IPC (defined in [`oasis_types::ipc`]).
-pub use oasis_types::ipc::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
+pub use oasis_types::ipc::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH, RadioRequest, StationRef};
 /// Display title of the Internet Radio app, shared between the app
 /// itself and every place that needs to identify a radio runner (e.g.
 /// the close-handler that stops playback when the window closes). Keep
@@ -435,33 +435,38 @@ impl RadioManager {
         Ok(())
     }
 
-    /// Process a request string from the terminal (via VFS IPC).
+    /// Process a request string from the terminal (via VFS IPC): parse it
+    /// as a [`RadioRequest`] and [`handle_request`](Self::handle_request) it.
     pub fn process_request(
         &mut self,
         request: &str,
         backend: &mut dyn AudioBackend,
     ) -> Result<String> {
-        let parts: Vec<&str> = request.trim().splitn(3, ' ').collect();
-        let cmd = parts[0];
+        let req = RadioRequest::parse(request).ok_or_else(|| {
+            OasisError::Command(format!("invalid radio request: {}", request.trim()).into())
+        })?;
+        self.handle_request(&req, backend)
+    }
 
-        match cmd {
-            "stop" => {
+    /// Carry out one typed request. `Tune` is the host's job (it needs the
+    /// network backend and owns the source): resolve its station with
+    /// [`StationRegistry::find`] and call [`tune`](Self::tune).
+    pub fn handle_request(
+        &mut self,
+        req: &RadioRequest,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<String> {
+        match req {
+            RadioRequest::Stop => {
                 self.stop(backend)?;
                 Ok("radio stopped".to_string())
             },
-            "vol" => {
-                let vol_str = parts.get(1).unwrap_or(&"");
-                let vol: u8 = vol_str.parse().map_err(|_| {
-                    OasisError::Command(format!("invalid volume: {vol_str}").into())
-                })?;
-                self.set_volume(vol, backend)?;
+            RadioRequest::Volume(vol) => {
+                self.set_volume(*vol, backend)?;
                 Ok(format!("volume: {}%", self.volume))
             },
-            "fav" => {
-                let idx_str = parts.get(1).unwrap_or(&"");
-                let idx: usize = idx_str
-                    .parse()
-                    .map_err(|_| OasisError::Command(format!("invalid index: {idx_str}").into()))?;
+            RadioRequest::Favorite(idx) => {
+                let idx = *idx;
                 if self.registry.toggle_favorite(idx) {
                     let fav = self.registry.stations[idx].favorite;
                     let name = &self.registry.stations[idx].name;
@@ -473,19 +478,16 @@ impl RadioManager {
                     ))
                 }
             },
-            "genre" => {
-                let genre = parts.get(1).unwrap_or(&"");
-                if genre.is_empty() {
-                    let genres = self.registry.genres();
-                    Ok(format!("Genres: {}", genres.join(", ")))
-                } else {
-                    self.set_genre_filter(genre);
-                    Ok(format!("genre filter: {genre}"))
-                }
+            RadioRequest::Genre(None) => {
+                let genres = self.registry.genres();
+                Ok(format!("Genres: {}", genres.join(", ")))
             },
-            // "tune" is handled by the main loop (needs NetworkBackend).
-            _ => Err(OasisError::Command(
-                format!("unknown radio command: {cmd}").into(),
+            RadioRequest::Genre(Some(genre)) => {
+                self.set_genre_filter(genre);
+                Ok(format!("genre filter: {genre}"))
+            },
+            RadioRequest::Tune(station) => Err(OasisError::Command(
+                format!("tune {station}: handled by the host").into(),
             )),
         }
     }

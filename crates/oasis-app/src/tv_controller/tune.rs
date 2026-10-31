@@ -20,16 +20,15 @@ fn tune_channel_from_vfs(state: &mut AppState, vfs: &mut dyn Vfs) {
     let Ok(data) = vfs.read(TV_REQUEST_PATH) else {
         return;
     };
-    let Some(number) = std::str::from_utf8(&data)
-        .ok()
-        .and_then(|s| s.trim().strip_prefix("tune_ch:"))
-        .map(str::to_string)
-    else {
+    let text = String::from_utf8_lossy(&data);
+    if !text.trim().starts_with("tune_ch:") {
         return;
-    };
+    }
     let _ = vfs.write(TV_REQUEST_PATH, b"");
-    let Ok(number) = number.parse::<u32>() else {
-        log::warn!("TV: bad channel in tune request: {number:?}");
+    let Some(oasis_core::ipc::TvRequest::TuneChannel(number)) =
+        oasis_core::ipc::TvRequest::parse(&text)
+    else {
+        log::warn!("TV: bad channel in tune request: {:?}", text.trim());
         return;
     };
     let Some(runner) = super::find_tv_guide_runner(&mut state.content.open_runners) else {
@@ -58,7 +57,10 @@ fn tune_channel_from_vfs(state: &mut AppState, vfs: &mut dyn Vfs) {
     };
     let url = ChannelCatalog::download_url(&req.episode);
     runner.refresh_tv_text();
-    state.tv.pending_tune = Some(format!("{url} {}", req.seek_secs));
+    state.tv.pending_tune = Some(oasis_core::ipc::TvTune {
+        url,
+        seek_secs: req.seek_secs,
+    });
 }
 
 /// Handle TV Guide tune requests -- start in-app video player.
@@ -72,17 +74,11 @@ pub(super) fn handle_tune_requests(
     // Queued by the shell's per-frame request drain (the guide's own
     // `tune_url` requests), the catalog auto-tune, auto-advance and
     // `tune_ch:` above.
-    let Some(data) = state.tv.pending_tune.take() else {
+    let Some(tune) = state.tv.pending_tune.take() else {
         return;
     };
-    let rest = data.as_str();
-    // Parse "url seek_secs".
-    let (url, seek_secs) = if let Some(space_idx) = rest.rfind(' ') {
-        let seek: u64 = rest[space_idx + 1..].parse().unwrap_or(0);
-        (&rest[..space_idx], seek)
-    } else {
-        (rest, 0u64)
-    };
+    let url = tune.url.as_str();
+    let seek_secs = tune.seek_secs;
     // Allow test override of seek position.
     let seek_secs = std::env::var("OASIS_TV_SEEK")
         .ok()

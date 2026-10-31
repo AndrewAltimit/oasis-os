@@ -137,6 +137,19 @@ impl StationRegistry {
         self.stations.iter().filter(|s| s.favorite).collect()
     }
 
+    /// The station a tune request names: by index, or by name
+    /// (case-insensitive).
+    pub fn find(&self, station: &oasis_types::ipc::StationRef) -> Option<&Station> {
+        use oasis_types::ipc::StationRef;
+        match station {
+            StationRef::Index(i) => self.stations.get(*i),
+            StationRef::Name(name) => self
+                .stations
+                .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(name)),
+        }
+    }
+
     /// Toggle the favorite flag on a station by index.
     pub fn toggle_favorite(&mut self, index: usize) -> bool {
         if let Some(station) = self.stations.get_mut(index) {

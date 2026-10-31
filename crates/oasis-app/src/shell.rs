@@ -1329,8 +1329,11 @@ fn carry_out_app_requests(
     requests: Vec<oasis_core::apps::AppRequest>,
 ) {
     for req in requests {
-        if let Some(tune) = oasis_apps::tv_guide::tune_url_request(&req) {
-            state.tv.pending_tune = Some(tune.to_string());
+        if req.path == oasis_core::ipc::TV_REQUEST_PATH
+            && let Some(oasis_core::ipc::TvRequest::TuneUrl(tune)) =
+                oasis_core::ipc::TvRequest::parse(&req.data)
+        {
+            state.tv.pending_tune = Some(tune);
             continue;
         }
         // The music request file is a line queue (several requests per
