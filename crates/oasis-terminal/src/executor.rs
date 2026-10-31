@@ -6,8 +6,7 @@
 use oasis_types::error::{OasisError, Result};
 
 use crate::pipeline::{
-    ChainOp, Scan, capture_text, parse_redirect, scan, split_chains, split_pipes,
-    strip_comments,
+    ChainOp, Scan, capture_text, parse_redirect, scan, split_chains, split_pipes, strip_comments,
 };
 use crate::types::{CommandOutput, Environment, MAX_EXEC_DEPTH};
 
