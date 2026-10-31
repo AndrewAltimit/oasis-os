@@ -132,8 +132,8 @@ graph TD
 | `oasis-backend-psp` | The shell EBOOT: sceGu rendering, controller input, ME video decode (in the workspace `exclude` list) |
 | `oasis-plugin-psp` | Kernel-mode overlay PRX: in-game UI + background MP3 |
 | `oasis-recovery-psp` | Network recovery EBOOT (WiFi TCP file server for unbricking) |
-| `oasis-devloop-psp` | Remote dev-automation PRX (WiFi TCP command server) |
-| `oasis-me-boot` | Minimal kernel PRX that boots the Media Engine (clean-room replacement for cooleyesBridge) |
+| `oasis-devloop-psp` | Remote dev-automation kernel PRX (polls `ms0:/seplugins/devloop_cmd.txt`: reboot, launch, screenshot) |
+| `oasis-me-boot` | Minimal kernel PRX that boots the Media Engine (clean-room replacement for cooleyesBridge); the EBOOT loads it from its GAME directory before H.264 decode |
 | `oasis-prx-decrypt-psp` | Kirk-based flash0 PRX decryptor |
 | `oasis-usb-client-psp`, `oasis-usb-debug-psp`, `oasis-usb-trace-psp`, `oasis-usb-vbus-psp` | USB thin-client driver and USB host-mode / VBUS research |
 

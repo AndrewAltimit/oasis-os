@@ -104,6 +104,31 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   (networking, MCP server docs); a plugin whose `init` fails drops what it
   registered (plugin guide).
 
+### PSP
+
+- EBOOT: a frame whose GU commands outgrow the 1 MB display list now drops the excess draws
+  (logged once as `[GU] display list full` in `eboot.log`) instead of writing past the buffer;
+  rust-psp's `sceGuGetMemory` never fails, so the old null checks never fired. Tall rounded
+  boxes and long text lines no longer emit off-screen geometry.
+- EBOOT: textures and the font atlas are written back from the data cache before the GE samples
+  them (small textures could show stale texels on hardware); `reinit_gu_frame` only re-opens the
+  display list after a utility dialog really ran, so Radio / Browser / TV Confirm with WLAN off
+  no longer issues a second `sceGuStart` (hang on hardware).
+- EBOOT: JavaScript `Date` / `performance.now()` use pspdev newlib's real layouts (64-bit
+  `time_t`, 36-byte `struct tm`); the shim's wider `struct tm` overwrote the caller's stack.
+  Audio commands from the main, video and I/O threads no longer race on the single-producer
+  queue. Malformed MP4 boxes, non-ASCII HTTP headers and Range-ignoring servers no longer hang
+  or panic the I/O thread or corrupt a resumed stream; interlaced H.264 reports its full height.
+- Overlay PRX: one bad MP3 frame after the first ~100 no longer ends the track / radio stream;
+  a closed radio connection reconnects instead of stalling; "toggle radio" takes effect
+  mid-track; `music_dir` / `video_dir` without a trailing `/` work; ME buffers are 64-byte
+  aligned; framebuffers with a stride under 480 are skipped. Stripped PRX: 156,546 B.
+- CI builds the seven standalone PSP crates (`oasis-me-boot`, `oasis-devloop-psp`,
+  `oasis-prx-decrypt-psp`, the four `oasis-usb-*-psp`) with warnings denied; all build at the
+  pinned rust-psp revision. Releases ship `oasis-me-boot.prx` (the EBOOT loads it from its GAME
+  directory for hardware H.264 decode), and the release notes install the overlay as
+  `ms0:/seplugins/oasis_plugin.prx`, the name `plugin status` / `plugin remove` expect.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an
