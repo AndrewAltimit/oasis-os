@@ -2,6 +2,11 @@
 //!
 //! Renders to an HTML `<canvas>` element using the Canvas 2D API,
 //! maps DOM events to `InputEvent`, and plays audio through HTML `<audio>` elements.
+//!
+//! # Feature flags
+//!
+//! - `wasm-youtube` (default) — the YouTube search / embed app
+//!   (`oasis-apps/video-embed`).
 
 mod app_requests;
 pub mod archive;

@@ -48,6 +48,15 @@
 //! FScopeLock Lock(&OasisMutex);
 //! oasis_tick(OasisHandle);
 //! ```
+//!
+//! # Feature flags
+//!
+//! - `video-decode` — `oasis_video_*` exports with openh264 decode
+//!   (`oasis-video/h264`).
+//! - `video-decode-ffmpeg` — the same exports with statically linked ffmpeg
+//!   (`oasis-video/ffmpeg`).
+//!
+//! Without either feature the `oasis_video_*` exports are not compiled.
 
 // Modules organized by functionality.
 mod audio;

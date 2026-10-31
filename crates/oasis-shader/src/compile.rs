@@ -1,6 +1,6 @@
 //! Shader compilation and linking via `glow`.
 
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 use glow::HasContext;
 
 /// Compile a GLSL shader from source and return the shader handle.
@@ -8,7 +8,7 @@ use glow::HasContext;
 /// # Errors
 ///
 /// Returns the info log on compilation failure.
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 pub fn compile_shader(
     gl: &glow::Context,
     shader_type: u32,
@@ -35,7 +35,7 @@ pub fn compile_shader(
 /// # Errors
 ///
 /// Returns the info log on link failure.
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 pub fn link_program(
     gl: &glow::Context,
     vert: glow::Shader,

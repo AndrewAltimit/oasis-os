@@ -4,7 +4,7 @@
 ///
 /// Draws a single oversized triangle covering the viewport.
 /// No vertex buffer needed — uses `gl_VertexID`.
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 pub const VERTEX_SHADER: &str = include_str!("common.vert");
 
 /// Balatro card-game swirl effect (GLSL ES 3.00).

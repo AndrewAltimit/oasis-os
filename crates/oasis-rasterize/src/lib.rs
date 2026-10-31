@@ -12,6 +12,11 @@
 //! The scanline span generators (`*_rows`, [`midpoint_row_extents`]) are
 //! defined in [`oasis_types::rasterize`] so the trait defaults can share
 //! them; they are re-exported here unchanged.
+//!
+//! # Feature flags
+//!
+//! - `ttf` — TTF/OTF glyph rasterization via fontdue (per-skin fonts; SDL only).
+//!   Off by default so PSP-adjacent builds never pull fontdue in.
 
 mod glyph;
 pub use glyph::{bitmap_ascent, bitmap_line_height, glyph_cell, glyph_mask, mask_runs};

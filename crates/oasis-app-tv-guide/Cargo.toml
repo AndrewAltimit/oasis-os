@@ -7,9 +7,6 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-[features]
-test-data = []
-
 [dependencies]
 oasis-app-core = { workspace = true }
 oasis-types = { workspace = true }

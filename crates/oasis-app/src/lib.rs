@@ -6,6 +6,18 @@
 //! headless end-to-end harness ([`harness`]) drive the exact same boot
 //! sequence, input dispatch, per-frame ticking and rendering against a
 //! software framebuffer — see `docs/testing.md`.
+//!
+//! # Feature flags
+//!
+//! - `javascript` (default) — QuickJS-NG in the browser (`oasis-core/javascript`).
+//! - `video-decode-ffmpeg` (default) — TV Guide / media video decode through
+//!   statically linked ffmpeg (`oasis-video/ffmpeg`); needs the ffmpeg dev libraries.
+//! - `video-decode` — the openh264 fallback decoder (`oasis-video/h264`) for hosts
+//!   without ffmpeg: `--no-default-features --features javascript,video-decode`.
+//!   Without either decoder the shell builds with video playback disabled.
+//! - `skin-dev` — poll the active external skin directory and hot-reload it on change.
+//! - `mcp` — the optional MCP control server (`mcp-server` command, `OASIS_MCP=1`);
+//!   see `docs/mcp-server.md`.
 
 pub mod app_state;
 pub mod audio_out;
