@@ -24,10 +24,18 @@ use crate::sfx::SfxId;
 // Lock-free command and response queues (SPSC: main thread -> workers)
 // ---------------------------------------------------------------------------
 
-/// Audio command queue: main thread pushes, audio thread pops.
-/// 64 slots buffer ~1.5 seconds of AAC at 44.1kHz (23ms per frame),
-/// absorbing network I/O jitter that causes audio stuttering.
+/// Audio command queue: the audio thread pops. 64 slots buffer ~1.5
+/// seconds of AAC at 44.1kHz (23ms per frame), absorbing network I/O
+/// jitter that causes audio stuttering.
+///
+/// The main, video and I/O threads all send audio commands, but
+/// `SpscQueue::push` is only safe for one producer at a time (it
+/// reads, writes and publishes `tail` without a CAS; a preempted push
+/// loses a command or rewinds `tail`). Push only through
+/// [`push_audio_cmd`], which serializes the producers.
 static AUDIO_QUEUE: SpscQueue<AudioCmd, 64> = SpscQueue::new();
+/// Producer-side lock for [`AUDIO_QUEUE`] (see [`push_audio_cmd`]).
+static AUDIO_PUSH_LOCK: AtomicBool = AtomicBool::new(false);
 /// I/O command queue: main thread pushes, I/O thread pops.
 static IO_CMD_QUEUE: SpscQueue<IoCmd, 16> = SpscQueue::new();
 /// I/O response queue: I/O thread pushes, main thread pops.
@@ -183,7 +191,7 @@ pub struct AudioHandle;
 impl AudioHandle {
     /// Send a command to the audio thread.
     pub fn send(&self, cmd: AudioCmd) {
-        let _ = AUDIO_QUEUE.push(cmd);
+        let _ = push_audio_cmd(cmd);
     }
 
     pub fn is_playing(&self) -> bool {
@@ -228,9 +236,29 @@ impl AudioHandle {
     }
 }
 
-/// Send an audio command from any context.
+/// Send an audio command from any thread (dropped if the queue is full).
 pub fn send_audio_cmd(cmd: AudioCmd) {
-    let _ = AUDIO_QUEUE.push(cmd);
+    let _ = push_audio_cmd(cmd);
+}
+
+/// Push onto [`AUDIO_QUEUE`] from any thread; `Err(cmd)` if it is full.
+///
+/// Producers take [`AUDIO_PUSH_LOCK`] so only one `SpscQueue::push` runs at
+/// a time. Threads preempt by priority on the PSP, so a waiter must not
+/// spin (a higher-priority spinner would never let the holder finish): it
+/// sleeps 50 us per attempt, which runs the lower-priority holder. The
+/// critical section is a single slot write, so contention is rare and brief.
+pub(crate) fn push_audio_cmd(cmd: AudioCmd) -> Result<(), AudioCmd> {
+    while AUDIO_PUSH_LOCK
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        // SAFETY: plain thread delay; no pointers involved.
+        unsafe { psp::sys::sceKernelDelayThread(50) };
+    }
+    let result = AUDIO_QUEUE.push(cmd);
+    AUDIO_PUSH_LOCK.store(false, Ordering::Release);
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +454,20 @@ fn io_log_verbose(msg: &str) {
     if !STREAMING_ACTIVE.load(Ordering::Relaxed) {
         io_log(msg);
     }
+}
+
+/// The trimmed value of HTTP header line `line` if its name is `name`
+/// (given with its trailing `:`, matched ASCII-case-insensitively).
+///
+/// Compares bytes, so a server-sent line with a multi-byte character
+/// where the name would end cannot panic the way `&line[..n]` does.
+fn header_value<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let head = line.as_bytes().get(..name.len())?;
+    if !head.eq_ignore_ascii_case(name.as_bytes()) {
+        return None;
+    }
+    // `name` is ASCII, so `name.len()` is a char boundary of `line`.
+    line.get(name.len()..).map(str::trim)
 }
 
 /// Find `\r\n\r\n` in a byte slice, return offset past it.

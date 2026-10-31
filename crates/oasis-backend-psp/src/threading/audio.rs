@@ -116,6 +116,14 @@ impl PspAacDecoder {
                 src.as_ptr() as *const core::ffi::c_void,
                 src.len() as u32,
             );
+            // The ME writes the PCM straight to RAM. Flush and drop any
+            // cached lines of `dst` (the caller zero-fills it) so a later
+            // eviction can't overwrite the decoded samples and the reads
+            // after decode fetch them from RAM.
+            sys::sceKernelDcacheWritebackInvalidateRange(
+                dst.as_ptr() as *const core::ffi::c_void,
+                (dst.len() * 2) as u32,
+            );
         }
 
         // SAFETY: sceAudiocodecDecode operates on the aligned buffer.

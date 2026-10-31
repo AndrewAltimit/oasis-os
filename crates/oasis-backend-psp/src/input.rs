@@ -82,8 +82,11 @@ impl PspBackend {
         // so hit-testing uses the correct coordinates.
         let pre_len = events.len();
         crate::cmd_server::drain_injected(&mut events);
-        for ev in &events[pre_len..] {
+        // Clamped like the analog path: a remote client can send any i32.
+        for ev in &mut events[pre_len..] {
             if let InputEvent::CursorMove { x, y } = ev {
+                *x = (*x).clamp(0, self.width as i32 - 1);
+                *y = (*y).clamp(0, self.height as i32 - 1);
                 self.cursor_x = *x;
                 self.cursor_y = *y;
             }
