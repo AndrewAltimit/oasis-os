@@ -68,7 +68,11 @@ small enough for a focused PR.
 
 ### Parsers
 
-<<<<<<< HEAD
+- **`style=""` attributes do not expand shorthands.**
+  `oasis_css::parser::parse_inline_style` returns the raw declaration
+  list without `expand_shorthands` (stylesheet rules get it), so an
+  inline `flex: 1` / `flex: 0 0 100px` is ignored; shorthands that the
+  value applier handles itself (`margin`, `padding`, ...) still work.
 - **No quirks-mode CSS.** The parser picks the quirks mode from the
   DOCTYPE (`Document::quirks_mode`) and applies its one tree difference,
   but no quirks-mode CSS rules (table font inheritance, body height,
@@ -78,18 +82,6 @@ small enough for a focused PR.
 - **Template contents are children, not a DocumentFragment.** They
   parse with the "in template" mode, but there is no `template.content`:
   JS and CSS see them as the element's children.
-=======
-- **`style=""` attributes do not expand shorthands.**
-  `oasis_css::parser::parse_inline_style` returns the raw declaration
-  list without `expand_shorthands` (stylesheet rules get it), so an
-  inline `flex: 1` / `flex: 0 0 100px` is ignored; shorthands that the
-  value applier handles itself (`margin`, `padding`, ...) still work.
-- **No quirks mode.** The DOCTYPE is ignored, so `<p><table>` always
-  closes the paragraph (quirks documents keep the table inside it) and
-  no quirks-mode CSS rules apply.
-- **No "in template" insertion mode.** Template contents parse "in
-  body", so `<template><tr>` drops the row.
->>>>>>> worktree-agent-ac5e3519d7c7b347b
 - **The DOM stores no namespaces.** The tree builder tracks them while
   parsing, but CSS (`svg|rect`) and JS (`namespaceURI`) cannot see them,
   and an SVG `<title>` is indistinguishable from the HTML one.
