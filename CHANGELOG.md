@@ -6,6 +6,34 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Apps
+
+- Text Editor: undoing (or redoing) back to the text as last opened or saved clears the
+  `[Modified]` marker, so closing no longer asks to save an unchanged file. Reopening Find /
+  Replace shows the previous query selected (`Find: [query]`): typing replaces it and
+  Backspace clears it, instead of appending to the old search.
+- `tv tune <ch>` reports "the TV Guide is not open" instead of "Tuning to ..." when no guide
+  can act on it: the shell publishes the guide's state to `/var/tv/status`
+  (`oasis_types::ipc::TvStatus`).
+- System Monitor says "Stale - the host stopped updating" once the host's snapshot stops
+  advancing for 5 s, instead of "Live" over frozen values (`SystemMonitorApp::is_stale`).
+- Settings shows the shell-published volume / font scale / reduced motion once its request
+  was consumed, so a change the shell rejected or clamped no longer stays on screen.
+- Labels fit what the font draws at small window sizes and large-font skins: File Manager
+  tile names (shrunk to 8 px, then ellipsized) and its address bar (keeps the path's tail),
+  System Monitor's info column, Internet Radio's favourite mark, Video Embed result cells.
+  `oasis-apps/tests/text_fits_window.rs` now also fails on overlapping text runs.
+
+### UI
+
+- `MenuBar` lays labels and drop-downs out with the backend's `measure_text` (recorded at
+  draw) instead of 7 px per character, and fits narrow bars: label padding shrinks, then
+  trailing menus fold into a `»` overflow menu (`MenuHit::Label(menus.len())`); drop-downs
+  stay inside the bar, dropping shortcut hints and ellipsizing labels.
+  `draw_dropdown` and `pointer_move` take the bar rect `(x, y, w, h)` **(breaking)**.
+- `TreeView` connector lines run through the rows of a node's children when the node has a
+  later sibling (the guide used to break across the subtree).
+
 ### Build, features & dependencies
 
 - Feature cleanup: `oasis-js` drops `rquickjs-engine` (rquickjs is always linked; the

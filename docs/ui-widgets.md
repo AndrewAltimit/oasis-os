@@ -142,7 +142,7 @@ any other:
 | Component | File | Purpose |
 |-----------|------|---------|
 | `ListView<T>` | `list_view.rs` | Scrollable list with virtualized item rendering (items drawn by a caller `fn`); `scroll_to` / `scroll_by` clamp, and drawing / `index_at(dy, viewport_h)` use the offset clamped to the content (`effective_scroll`) |
-| `MenuBar` | `menu_bar.rs` | Windows-95-style top menu bar with drop-downs; returns `MenuHit` for clicks (used by Paint, Text Editor) |
+| `MenuBar` | `menu_bar.rs` | Windows-95-style top menu bar with drop-downs; returns `MenuHit` for clicks (used by File Manager, Paint, Text Editor). Measures with the drawing backend; on a narrow bar trailing menus fold into a `»` overflow menu |
 | `NinePatch`, `NinePatchSlices` | `nine_patch.rs` | 9-slice rendering of themed borders from a texture (re-exported from `oasis_types::nine_patch`) |
 | `FlexLayout`, `GridLayout` | `flex.rs` | Lightweight flex and grid layout helpers producing `ComputedRect`s; flex shares sum to exactly the free space (no stray pixel after the last child) and huge sizes saturate; children stretch across the cross axis unless given a `cross_size`, which `align_items` / `align_self` then place |
 | `Padding`, `center`, `distribute`, `max_scroll`, `HAlign` / `VAlign`, `MeasureCache` | `layout.rs` | Centering, alignment, padding, distribution, scroll bounds, cached text measurement |
