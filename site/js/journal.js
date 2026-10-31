@@ -275,6 +275,27 @@
     pre.setAttribute("tabindex", "0"); // scrollable region reachable by keyboard
   });
 
+  // Tables wider than the column scroll sideways: make those reachable and
+  // scrollable from the keyboard, and name them for screen readers.
+  var tableWraps = $$(".prose .table-wrap");
+  var markScrollable = function () {
+    tableWraps.forEach(function (w) {
+      if (w.scrollWidth > w.clientWidth + 1) {
+        w.setAttribute("tabindex", "0");
+        w.setAttribute("role", "region");
+        w.setAttribute("aria-label", "Table, scrolls horizontally");
+      } else {
+        w.removeAttribute("tabindex");
+        w.removeAttribute("role");
+        w.removeAttribute("aria-label");
+      }
+    });
+  };
+  if (tableWraps.length) {
+    markScrollable();
+    window.addEventListener("resize", markScrollable);
+  }
+
   // ------------------------------------------------------------------
   // Figure lightbox: click an inline figure image to view it full size.
   // Pixel-art captures (img.pixel) are scaled by whole multiples and kept

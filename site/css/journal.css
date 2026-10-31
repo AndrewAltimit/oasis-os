@@ -21,11 +21,14 @@
   padding-block: clamp(3.5rem, 8vw, 6rem) clamp(1rem, 2vw, 1.5rem);
 }
 .jhero::before {
-  content: ""; position: absolute; inset: -40% -10% auto 30%; height: 160%; z-index: -1;
+  /* the glow fades out on every side (mask), so the hero's overflow clip
+     never shows as a hard edge on wide screens */
+  content: ""; position: absolute; inset: -40% -10% 0 30%; z-index: -1;
   background:
     radial-gradient(40% 40% at 70% 40%, var(--accent-soft), transparent 70%),
     radial-gradient(30% 30% at 95% 80%, var(--sky-soft), transparent 70%);
-  filter: blur(10px);
+  -webkit-mask-image: radial-gradient(closest-side, #000 55%, transparent);
+  mask-image: radial-gradient(closest-side, #000 55%, transparent);
 }
 .jhero__title {
   font-size: var(--step-5); line-height: var(--lh-tight);
@@ -494,7 +497,17 @@
   margin-block: 1.75em; overflow-x: auto;
   border: 1px solid var(--line); border-radius: var(--radius-sm);
   scrollbar-width: thin; scrollbar-color: var(--line-2) transparent;
+  /* scroll shadows: the "local" covers scroll with the content and hide the
+     glows once an edge is reached, so a glow means "more this way" */
+  background:
+    linear-gradient(to right, var(--bg) 40%, transparent) left / 32px 100% no-repeat local,
+    linear-gradient(to left, var(--bg) 40%, transparent) right / 32px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, rgba(124, 199, 255, 0.22), transparent)
+      left / 12px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgba(124, 199, 255, 0.22), transparent)
+      right / 12px 100% no-repeat scroll;
 }
+.prose .table-wrap:focus-visible { outline-offset: 2px; }
 .prose table {
   width: 100%; border-collapse: collapse; font-size: 0.9rem; line-height: 1.5;
   font-variant-numeric: tabular-nums;
@@ -508,7 +521,9 @@
 .prose tbody tr:nth-child(even) td { background: rgba(255, 255, 255, 0.015); }
 .prose tr:last-child td { border-bottom: 0; }
 .prose tbody tr:hover td { background: rgba(255, 255, 255, 0.035); }
-.prose td code { font-size: 0.8em; }
+.prose td code { font-size: 0.8em; white-space: nowrap; overflow-wrap: normal; }
+/* prose columns (usually the last) stay readable on phones: scroll, not squeeze */
+.prose td:last-child:not(:only-child) { min-width: 12rem; }
 
 /* figures */
 .prose figure { margin-block: 2.25em; text-align: center; }
