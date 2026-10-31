@@ -240,7 +240,7 @@ fn resolution_change_keeps_the_previewed_theme() {
     assert_eq!(h.state().skin.theme.background, "#123456");
 }
 
-/// Undoing back to the opened text left the Text Editor "[Modified]" (and
+/// Undoing back to the opened text left the Text Editor modified (and
 /// closing it prompted to save); reopening Find appended to the previous
 /// query instead of replacing it.
 #[test]
@@ -253,11 +253,12 @@ fn text_editor_undo_to_saved_is_clean_and_find_replaces_the_query() {
     h.type_text("x");
     h.settle();
     h.render_now();
-    assert!(h.text_drawn_contains("[Modified]"), "{:?}", h.frame_text());
+    // The status bar marks the file name with `*` while modified.
+    assert!(h.text_drawn_contains("readme.txt*"), "{:?}", h.frame_text());
     h.key_with(Key::Char('z'), Modifiers::CTRL);
     h.settle();
     h.render_now();
-    assert!(!h.text_drawn_contains("[Modified]"), "{:?}", h.frame_text());
+    assert!(!h.text_drawn_contains("readme.txt*"), "{:?}", h.frame_text());
 
     h.key_with(Key::Char('f'), Modifiers::CTRL);
     h.type_text("first");
