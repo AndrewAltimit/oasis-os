@@ -6,6 +6,18 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Build, features & dependencies
+
+- Feature cleanup: `oasis-js` drops `rquickjs-engine` (rquickjs is always linked; the
+  feature could not be turned off), `oasis-core` drops the unused `test-data`, and
+  `oasis-app-tv-guide` drops `test-data` (its fixtures are now test-only) **(breaking)**.
+  `oasis-shader/gl-native` no longer also exposes an implicit `glow` feature.
+- `oasis-app` now enables `oasis-core/skin-ttf`, so `skin lint` in the desktop shell parses
+  skin fonts as documented (the workspace dependency entry had turned it off).
+- Every crate with features documents them under `# Feature flags` in its crate docs.
+- Releases: a `v*` tag whose version differs from the Cargo workspace version (or the shipped
+  PSP crates') now fails `create-release` (`scripts/check-release-version.py`).
+
 ### Skins, vector graphics & shaders
 
 - Skin inheritance (`inherits = "<parent>"`) now fills *every* field the child omits: the nine
