@@ -6,6 +6,25 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Browser (CSS)
+
+- The user-agent sheet is its own cascade origin: author rules in any `@layer` now beat it
+  (layered pages such as Tailwind v4 lost to UA `margin` / `font-size` / `display`
+  defaults), presentational hints beat it (`cellpadding="0"` now removes the UA cell
+  padding), and important UA declarations beat important author ones.
+- `revert-layer` rolls back to the previous cascade layer (it was ignored), or acts as
+  `unset` when there is none.
+- Custom properties honour CSS-wide keywords: `--x: initial` is the guaranteed-invalid
+  value (the "space toggle": `var(--x, fallback)` uses the fallback), `inherit` / `unset`
+  take the parent's value (they used to be stored as the literal text).
+- `:is()` / `:where()` / `:not()` accept complex selectors (`:where(.prose > p)`,
+  `:not(.a .b)`, Tailwind Typography's `:not(:where([class~=not-prose] *))`); they took only
+  compound selectors and misparsed the rest of the selector. `:is()` / `:where()` drop
+  invalid entries, an invalid `:not()` entry matches nothing, and `&` inside them works in
+  nested rules. `SimpleSelector::{Is, Where, Not}` now hold `Vec<Selector>` **(breaking)**.
+- Four-side shorthands (`margin`, `padding`, `border-width` / `-style` / `-color`) with
+  more than four values are dropped as invalid instead of using the first four.
+
 ### Build, features & dependencies
 
 - Feature cleanup: `oasis-js` drops `rquickjs-engine` (rquickjs is always linked; the

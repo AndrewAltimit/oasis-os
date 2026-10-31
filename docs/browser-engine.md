@@ -235,7 +235,15 @@ directly.
   counts as no match for the whole selector, `:not()` included.
 - `:has()` relational pseudo-class with `>`/`+`/`~` leading
   combinators, scope-bounded inner combinators.
-- Selectors Level 4 `:not(a, b, c)` list form.
+- Selectors Level 4 `:is()` / `:where()` / `:not()` with complex
+  selector lists (`:where(.prose > p)`, `:not(.a .b)`; `:is()` /
+  `:where()` forgiving, an invalid `:not()` entry matches nothing),
+  specificity of the most specific argument, and `&` inside them in
+  nested rules (`.a { :where(& > p) {} }`).
+- Cascade origins: the built-in UA sheet is its own origin below
+  presentational hints (`cellpadding`, `align`, ...) and every author
+  rule, layered or not; `!important` reverses the order (important UA
+  beats important inline beats important author).
 - `@layer` cascade layers — statement / named-block / anonymous-block
   forms, cross-stylesheet name merging, factored into the cascade
   sort with `!important` inversion. Nested layers are qualified
@@ -248,7 +256,11 @@ directly.
   `display`, ...), and on shorthands (`border`, `background`, `font`,
   `outline`, `list-style`, `border-radius`, `flex`) reaches every
   longhand; `all: unset | initial | inherit` resets every modelled
-  property but `direction` (`revert` is still ignored). The `flex` shorthand implements every form of Flexbox 1
+  property but `direction`. `revert` rolls back to the UA value and
+  `revert-layer` to the previous cascade layer (`unset` when there is
+  none). On custom properties `initial` is the guaranteed-invalid value
+  (so `var(--x, fallback)` falls back), `inherit` / `unset` take the
+  parent's value. The `flex` shorthand implements every form of Flexbox 1
   §7.1.1 (`auto`, `none`, `initial`, `<grow> <shrink>? || <basis>`).
 - Attribute selectors: all six operators, the `i` / `s` case flags, and
   HTML's case-insensitive attribute values (`[type=checkbox]` matches

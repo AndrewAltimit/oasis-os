@@ -16,7 +16,7 @@ use background::expand_background;
 #[cfg(test)]
 use border::is_border_style;
 use border::{expand_border, expand_border_side};
-use box_model::expand_box_shorthand;
+use box_model::expand_four_sides;
 use flex::expand_flex;
 use font::expand_font;
 pub use gradient::{parse_linear_gradient, parse_radial_gradient, parse_repeating_linear_gradient};
@@ -56,13 +56,11 @@ pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
                 }
                 continue;
             }
+            if let Some(sides) = expand_four_sides(&decl.property, &decl.value, decl.important) {
+                out.extend(sides);
+                continue;
+            }
             match decl.property.as_str() {
-                "margin" => {
-                    out.extend(expand_box_shorthand("margin", &decl.value, decl.important));
-                },
-                "padding" => {
-                    out.extend(expand_box_shorthand("padding", &decl.value, decl.important));
-                },
                 "border" => {
                     out.extend(expand_border(&decl.value, decl.important));
                 },
@@ -78,141 +76,6 @@ pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
                 },
                 "list-style" => {
                     out.extend(expand_list_style(&decl.value, decl.important));
-                },
-                "border-width" => {
-                    let vals = match &decl.value {
-                        CssValue::Multiple(vs) => vs.clone(),
-                        other => vec![other.clone()],
-                    };
-                    let (t, r, b, l) = match vals.len() {
-                        1 => (
-                            vals[0].clone(),
-                            vals[0].clone(),
-                            vals[0].clone(),
-                            vals[0].clone(),
-                        ),
-                        2 => (
-                            vals[0].clone(),
-                            vals[1].clone(),
-                            vals[0].clone(),
-                            vals[1].clone(),
-                        ),
-                        3 => (
-                            vals[0].clone(),
-                            vals[1].clone(),
-                            vals[2].clone(),
-                            vals[1].clone(),
-                        ),
-                        _ => (
-                            vals[0].clone(),
-                            vals.get(1).cloned().unwrap_or(vals[0].clone()),
-                            vals.get(2).cloned().unwrap_or(vals[0].clone()),
-                            vals.get(3).cloned().unwrap_or(vals[0].clone()),
-                        ),
-                    };
-                    for (prop, val) in [
-                        ("border-top-width", t),
-                        ("border-right-width", r),
-                        ("border-bottom-width", b),
-                        ("border-left-width", l),
-                    ] {
-                        out.push(Declaration {
-                            property: prop.into(),
-                            value: val,
-                            important: decl.important,
-                            property_id: PropertyId::from_name(prop),
-                        });
-                    }
-                },
-                "border-style" => {
-                    let vals = match &decl.value {
-                        CssValue::Multiple(vs) => vs.clone(),
-                        other => vec![other.clone()],
-                    };
-                    let (t, r, b, l) = match vals.len() {
-                        1 => (
-                            vals[0].clone(),
-                            vals[0].clone(),
-                            vals[0].clone(),
-                            vals[0].clone(),
-                        ),
-                        2 => (
-                            vals[0].clone(),
-                            vals[1].clone(),
-                            vals[0].clone(),
-                            vals[1].clone(),
-                        ),
-                        3 => (
-                            vals[0].clone(),
-                            vals[1].clone(),
-                            vals[2].clone(),
-                            vals[1].clone(),
-                        ),
-                        _ => (
-                            vals[0].clone(),
-                            vals.get(1).cloned().unwrap_or(vals[0].clone()),
-                            vals.get(2).cloned().unwrap_or(vals[0].clone()),
-                            vals.get(3).cloned().unwrap_or(vals[0].clone()),
-                        ),
-                    };
-                    for (prop, val) in [
-                        ("border-top-style", t),
-                        ("border-right-style", r),
-                        ("border-bottom-style", b),
-                        ("border-left-style", l),
-                    ] {
-                        out.push(Declaration {
-                            property: prop.into(),
-                            value: val,
-                            important: decl.important,
-                            property_id: PropertyId::from_name(prop),
-                        });
-                    }
-                },
-                "border-color" => {
-                    let vals = match &decl.value {
-                        CssValue::Multiple(vs) => vs.clone(),
-                        other => vec![other.clone()],
-                    };
-                    let (t, r, b, l) = match vals.len() {
-                        1 => (
-                            vals[0].clone(),
-                            vals[0].clone(),
-                            vals[0].clone(),
-                            vals[0].clone(),
-                        ),
-                        2 => (
-                            vals[0].clone(),
-                            vals[1].clone(),
-                            vals[0].clone(),
-                            vals[1].clone(),
-                        ),
-                        3 => (
-                            vals[0].clone(),
-                            vals[1].clone(),
-                            vals[2].clone(),
-                            vals[1].clone(),
-                        ),
-                        _ => (
-                            vals[0].clone(),
-                            vals.get(1).cloned().unwrap_or(vals[0].clone()),
-                            vals.get(2).cloned().unwrap_or(vals[0].clone()),
-                            vals.get(3).cloned().unwrap_or(vals[0].clone()),
-                        ),
-                    };
-                    for (prop, val) in [
-                        ("border-top-color", t),
-                        ("border-right-color", r),
-                        ("border-bottom-color", b),
-                        ("border-left-color", l),
-                    ] {
-                        out.push(Declaration {
-                            property: prop.into(),
-                            value: val,
-                            important: decl.important,
-                            property_id: PropertyId::from_name(prop),
-                        });
-                    }
                 },
                 "flex" => {
                     out.extend(expand_flex(&decl.value, decl.important));
