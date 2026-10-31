@@ -6,6 +6,26 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Performance
+
+- Software rendering (the UE5 framebuffer, the headless harness and every
+  `SoftwareBuffer` user) draws a full shell frame 2.6-3.1x faster (480x272 dashboard
+  149 -> 57 us, XP 1024x768 with two windows 1.8 -> 0.59 ms): opaque spans fill as one
+  vectorized store, translucent spans over the opaque framebuffer blend branch-free,
+  bitmap glyph ink runs are cached per text style, text lines outside the clip are
+  skipped, and horizontal rounded-rect gradients interpolate once per column. Output is
+  pixel-identical (rasterizer goldens, backend parity, and frame hashes of every skin).
+- Idle (elided) shell frames cost 20-45% less: the ~15 IPC request files polled every frame are
+  settled with an existence / size check instead of a permission-checked read whose
+  missing-file error formatted a message.
+- CSS cascade: an ancestor Bloom filter rejects descendant / child selectors whose
+  ancestor ids, classes or tags are absent without walking the ancestor chain, rules are
+  indexed under one subject key (id > class > tag) instead of all of them, and matched
+  declarations borrow from the stylesheet instead of cloning: a 1,210-rule page styles
+  3.2x faster (15.8 -> 4.9 ms).
+- New criterion benches: `oasis-app` `shell_frame` (whole-shell render / idle step at
+  480x272 and 1024x768), more rasterizer shapes, and a large-page cascade.
+
 ### Browser (CSS)
 
 - The user-agent sheet is its own cascade origin: author rules in any `@layer` now beat it
